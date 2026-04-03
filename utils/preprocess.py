@@ -14,8 +14,8 @@ def preprocess_data(data_folder, subsampling, max_horizon):
     max_dh = data_per_day*max_horizon
     horizons = np.arange(np.timedelta64(0, 'D'), np.timedelta64(max_horizon, 'D'))
     
-    # here I need to use the highest value for the horizon, in order for dataset_x to be compatible with the section where dependence of the CRPS on the horizon
-    ind_tar = np.arange(len(pcs_norm) - max_dh)[::data_per_day*subsampling]
+    # here I need to use the highest value for the horizon, in order for dataset_x to be compatible with the section where the CRPS depends on the horizon
+    ind_tar = np.arange(len(pcs_norm) - max_dh)[1::data_per_day*subsampling]
    
     pcs_norm.attrs['data_per_day'] = data_per_day
     
