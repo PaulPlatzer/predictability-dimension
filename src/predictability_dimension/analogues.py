@@ -264,6 +264,55 @@ def compute_CRPSclim_fast(
     return mae - 0.5 * mad
 
 
+def compute_density_proxy(distances: np.ndarray, k: int = 50) -> np.ndarray:
+    """Mean distance to the K nearest analogues — large value means low density."""
+
+    return distances[:, :k].mean(axis=1)
+
+
+def compute_analogue_spread_horizons(
+    states: np.ndarray,
+    indices: np.ndarray,
+    horizons: list[int],
+    k: int | None = None,
+) -> np.ndarray:
+    """RMS ensemble spread of evolved analogues at each lead time.
+
+    Parameters
+    ----------
+    states:
+        Full state matrix, shape (n_times, n_features).
+    indices:
+        Absolute time indices of the K analogues for each target,
+        shape (n_targets, K).
+    horizons:
+        Lead times in time steps (days for daily ERA5 data).
+    k:
+        Number of analogues to use (defaults to all K).
+
+    Returns
+    -------
+    np.ndarray, shape (n_targets, len(horizons))
+        Spread = sqrt(mean over features of variance over members).
+    """
+
+    n_targets, K_max = indices.shape
+    k = min(k or K_max, K_max)
+    n_times = len(states)
+    spread = np.full((n_targets, len(horizons)), np.nan)
+
+    for h_idx, h in enumerate(horizons):
+        evolved = indices[:, :k] + h  # (n_targets, k)
+        for i in range(n_targets):
+            valid = evolved[i] < n_times
+            if valid.sum() < 2:
+                continue
+            members = states[evolved[i, valid]]  # (n_valid, n_features)
+            spread[i, h_idx] = np.sqrt(np.mean(np.var(members, axis=0, ddof=1)))
+
+    return spread
+
+
 def compute_theta(ind: np.ndarray, q: float) -> np.ndarray:
     """Estimate persistence from temporal clustering of analogue indices."""
 
