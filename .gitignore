@@ -12,3 +12,4 @@ env/
 
 outputs/
 figures/generated/
+.handoff/codex-session.jsonl
