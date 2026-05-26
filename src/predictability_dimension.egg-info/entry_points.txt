@@ -1,0 +1,3 @@
+[console_scripts]
+compare-tigge-spread = predictability_dimension.cli.compare_tigge_spread:main
+compute-raw-dimension = predictability_dimension.cli.compute_raw_dimension:main
