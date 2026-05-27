@@ -313,6 +313,143 @@ def compute_analogue_spread_horizons(
     return spread
 
 
+def compute_crps_ana_horizons(
+    states: np.ndarray,
+    tar_idx: np.ndarray,
+    indices: np.ndarray,
+    horizons: list[int],
+    k: int | None = None,
+    n_pairs_mad: int = 200,
+    rng_seed: int = 1312,
+) -> np.ndarray:
+    """Feature-averaged CRPS of analogue forecasts vs the verified state.
+
+    CRPS(t, h) = mean_features[ MAE(t,h) ] - 0.5 * mean_features[ MAD(t,h) ]
+
+    where MAE is the mean absolute error of evolved analogue members against
+    the true state at t+h, and MAD is estimated by random pairwise sampling
+    among the evolved analogue members.
+
+    Parameters
+    ----------
+    states:
+        Full state matrix, shape (n_times, n_features).
+    tar_idx:
+        Absolute ERA5 time indices of the target dates, shape (n_targets,).
+    indices:
+        Analogue indices for each target, shape (n_targets, K).
+    horizons:
+        Lead times in time steps (days for daily ERA5).
+    k:
+        Number of analogues to use (default: all K).
+    n_pairs_mad:
+        Random pairs used for Monte-Carlo MAD estimation per target.
+    rng_seed:
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    np.ndarray, shape (n_targets, len(horizons))
+    """
+
+    n_targets = len(tar_idx)
+    n_times = len(states)
+    k = min(k or indices.shape[1], indices.shape[1])
+    rng = np.random.default_rng(rng_seed)
+    crps = np.full((n_targets, len(horizons)), np.nan)
+
+    for h_idx, h in enumerate(horizons):
+        evolved_tar = tar_idx + h          # (n_targets,)
+        evolved_ana = indices[:, :k] + h   # (n_targets, k)
+
+        for i in range(n_targets):
+            if evolved_tar[i] >= n_times:
+                continue
+            valid = evolved_ana[i] < n_times
+            if valid.sum() < 2:
+                continue
+
+            target  = states[evolved_tar[i]]          # (n_features,)
+            members = states[evolved_ana[i, valid]]   # (k_valid, n_features)
+            k_valid = members.shape[0]
+
+            mae = float(np.mean(np.abs(target - members)))
+
+            # Monte-Carlo MAD with random pairs (no replacement)
+            n_pairs = min(n_pairs_mad, k_valid * (k_valid - 1) // 2)
+            i1 = rng.integers(0, k_valid, size=n_pairs)
+            i2 = rng.integers(0, k_valid, size=n_pairs)
+            same = i1 == i2
+            i1[same] = (i1[same] + 1) % k_valid
+            mad = float(np.mean(np.abs(members[i1] - members[i2])))
+
+            crps[i, h_idx] = mae - 0.5 * mad
+
+    return crps
+
+
+def compute_crps_clim_horizons(
+    states: np.ndarray,
+    tar_idx: np.ndarray,
+    horizons: list[int],
+    n_ref: int = 300,
+    rng_seed: int = 42,
+) -> np.ndarray:
+    """Feature-averaged CRPS of a stationary climatological forecast.
+
+    Uses the full ERA5 record as the climatological ensemble.  The ensemble
+    spread term (MAD_clim) is constant across targets and horizons.
+
+    Parameters
+    ----------
+    states:
+        Full state matrix, shape (n_times, n_features).
+    tar_idx:
+        Absolute time indices of the target dates, shape (n_targets,).
+    horizons:
+        Lead times in time steps (days for daily ERA5).
+    n_ref:
+        Number of randomly drawn climatological members.
+    rng_seed:
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    np.ndarray, shape (n_targets, len(horizons))
+    """
+
+    n_targets = len(tar_idx)
+    n_times = len(states)
+    rng = np.random.default_rng(rng_seed)
+    crps = np.full((n_targets, len(horizons)), np.nan)
+
+    # MAD_clim is constant (does not depend on target or horizon)
+    r1 = rng.choice(n_times, size=n_ref, replace=False)
+    r2 = rng.choice(n_times, size=n_ref, replace=False)
+    mad_clim = float(np.mean(np.abs(states[r1] - states[r2])))
+
+    for h_idx, h in enumerate(horizons):
+        evolved_tar = tar_idx + h
+        ref = states[rng.choice(n_times, size=n_ref, replace=False)]  # (n_ref, n_features)
+
+        valid_t = evolved_tar < n_times
+        targets = states[evolved_tar[valid_t]]  # (n_valid, n_features)
+
+        # Compute MAE for each target vs the same climatological sample
+        # Process in chunks to limit peak memory to ~200 MB
+        chunk = 256
+        mae_all = np.empty(valid_t.sum())
+        for start in range(0, len(targets), chunk):
+            batch = targets[start : start + chunk]  # (chunk, n_features)
+            mae_all[start : start + chunk] = np.mean(
+                np.abs(batch[:, None, :] - ref[None, :, :]), axis=(1, 2)
+            )
+
+        crps[valid_t, h_idx] = mae_all - 0.5 * mad_clim
+
+    return crps
+
+
 def compute_theta(ind: np.ndarray, q: float) -> np.ndarray:
     """Estimate persistence from temporal clustering of analogue indices."""
 
