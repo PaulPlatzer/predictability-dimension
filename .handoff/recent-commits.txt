@@ -1,8 +1,0 @@
-2da6451 Rearrange code structure and correct CRPS_clim issue.
-b059be5 added downgraded ERA5 data
-7c6e0c7 added the plots comparing the dimension with the error growth instead of the spread
-fae0092 Added the spread computed with the TIGGE dataset, and compared it with the dimension
-f4d686d forgot to add the notebook comparing the dimensions and the spread, here it is
-41e19df added in data folder the spread computed from the TIGGE dataset, and a notebook comparing this pread with the dimensions
-ac19a66 added README.md
-d36dc85 first commit
