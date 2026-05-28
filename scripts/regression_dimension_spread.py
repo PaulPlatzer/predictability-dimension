@@ -144,7 +144,10 @@ def main() -> None:
     # ── Model family comparison (if analogue_spread available) ───────────────
     _run_model_families(ana, dim_aligned, spread_aligned, x2,
                         common_times, args.estimators, outdir,
-                        results_by_k_last=results_by_k)
+                        target_type="growth")
+    _run_model_families(ana, dim_aligned, spread_aligned, x2,
+                        common_times, args.estimators, outdir,
+                        target_type="level")
 
     print(f"\nAll figures saved in {outdir}/")
 
@@ -171,6 +174,19 @@ def _ana_spread_growth(
     return growth
 
 
+def _ana_spread_level(
+    ana: xr.Dataset, common_times: np.ndarray, horizons: list[int]
+) -> np.ndarray | None:
+    """Analogue spread levels ana_spread(t,h) for each h. Returns (n, n_h) or None."""
+    if "analogue_spread" not in ana.data_vars:
+        return None
+    ana_sel = ana["analogue_spread"].sel(time=common_times)
+    return np.column_stack([
+        ana_sel.sel(step=np.timedelta64(h, "D")).values
+        for h in horizons
+    ])
+
+
 def _run_model_families(
     ana: xr.Dataset,
     dim_aligned: xr.Dataset,
@@ -179,28 +195,45 @@ def _run_model_families(
     common_times: np.ndarray,
     estimators: list[str],
     outdir: Path,
-    results_by_k_last: dict | None = None,
+    target_type: str = "growth",
 ) -> None:
-    """Fit the 5 predictor families and produce comparison figures."""
+    """Fit the 5 predictor families and produce comparison figures.
+
+    target_type:
+        "growth" — target = TIGGE cumulative growth, horizon predictor = ana_growth
+        "level"  — target = TIGGE spread level,      horizon predictor = ana_level
+    """
 
     if "analogue_spread" not in ana.data_vars:
         print("\n[model families] Skipped — analogue_spread not in analogue file.")
         return
 
-    print("\n=== Model family comparison (cumulative growth) ===")
+    print(f"\n=== Model family comparison ({target_type}) ===")
 
-    # ── TIGGE growth target ───────────────────────────────────────────────────
-    step0   = np.timedelta64(0, "D")
-    spread0 = spread_aligned.sel(step=step0).values.squeeze()
-    y_cum   = np.column_stack([
-        spread_aligned.sel(step=np.timedelta64(h, "D")).values.squeeze() / spread0
-        for h in HORIZONS_DAYS
-    ])                                                                  # (n, 7)
-
-    # ── Analogue spread growth ────────────────────────────────────────────────
-    x_ag = _ana_spread_growth(ana, common_times, HORIZONS_DAYS)
-    if x_ag is None:
-        return
+    # ── Target and horizon predictor ──────────────────────────────────────────
+    if target_type == "growth":
+        step0 = np.timedelta64(0, "D")
+        if step0 not in spread_aligned.step.values:
+            print(f"  [model families growth] step=0 absent from TIGGE spread — skipping.")
+            return
+        spread0 = spread_aligned.sel(step=step0).values.squeeze()
+        y = np.column_stack([
+            spread_aligned.sel(step=np.timedelta64(h, "D")).values.squeeze() / spread0
+            for h in HORIZONS_DAYS
+        ])
+        x_ah = _ana_spread_growth(ana, common_times, HORIZONS_DAYS)
+        if x_ah is None:
+            return
+        h_key = "ana_growth"
+    else:
+        y = np.column_stack([
+            spread_aligned.sel(step=np.timedelta64(h, "D")).values.squeeze()
+            for h in HORIZONS_DAYS
+        ])
+        x_ah = _ana_spread_level(ana, common_times, HORIZONS_DAYS)
+        if x_ah is None:
+            return
+        h_key = "ana_level"
 
     # ── Neighbourhood skill (optional) ───────────────────────────────────────
     has_neigh = "neighbourhood_skill" in ana.data_vars
@@ -211,7 +244,7 @@ def _run_model_families(
             ana["neighbourhood_skill"].sel(time=common_times).isel(
                 step_crps=h_idx_map[h]).values
             for h in HORIZONS_DAYS
-        ])                                                              # (n, 7)
+        ])
     else:
         x_ns = None
         print("  neighbourhood_skill absent — running M1, M2, M4 only.")
@@ -228,32 +261,32 @@ def _run_model_families(
         # ── Define model families ─────────────────────────────────────────────
         families: dict[str, dict] = {}
 
-        families["M1: ana_growth"] = fit_single_model(
+        families[f"M1: {h_key}"] = fit_single_model(
             static_preds  = {},
-            horizon_preds = {"ana_growth": x_ag},
-            y=y_cum, horizons=HORIZONS_DAYS,
+            horizon_preds = {h_key: x_ah},
+            y=y, horizons=HORIZONS_DAYS,
         )
         families["M2: + density"] = fit_single_model(
             static_preds  = {"density": x2},
-            horizon_preds = {"ana_growth": x_ag},
-            y=y_cum, horizons=HORIZONS_DAYS,
+            horizon_preds = {h_key: x_ah},
+            y=y, horizons=HORIZONS_DAYS,
         )
         if has_neigh:
             families["M3: + neigh_skill"] = fit_single_model(
                 static_preds  = {"density": x2},
-                horizon_preds = {"ana_growth": x_ag, "neigh_skill": x_ns},
-                y=y_cum, horizons=HORIZONS_DAYS,
+                horizon_preds = {h_key: x_ah, "neigh_skill": x_ns},
+                y=y, horizons=HORIZONS_DAYS,
             )
         families["M4: + dim"] = fit_single_model(
             static_preds  = {"density": x2, "dim": x1},
-            horizon_preds = {"ana_growth": x_ag},
-            y=y_cum, horizons=HORIZONS_DAYS,
+            horizon_preds = {h_key: x_ah},
+            y=y, horizons=HORIZONS_DAYS,
         )
         if has_neigh:
             families["M5: full"] = fit_single_model(
                 static_preds  = {"density": x2, "dim": x1},
-                horizon_preds = {"ana_growth": x_ag, "neigh_skill": x_ns},
-                y=y_cum, horizons=HORIZONS_DAYS,
+                horizon_preds = {h_key: x_ah, "neigh_skill": x_ns},
+                y=y, horizons=HORIZONS_DAYS,
             )
 
         full_key = list(families)[-1]   # most complete model
@@ -265,11 +298,11 @@ def _run_model_families(
             print(f"  {name:<25}  {res['r2'].round(3)}")
 
         # ── Figure ───────────────────────────────────────────────────────────
-        out_path = outdir / f"model_families_{estimator}_K{K_REF}.png"
+        out_path = outdir / f"model_families_{estimator}_K{K_REF}_{target_type}.png"
         plot_model_family_comparison(
             model_results  = families,
             full_model_key = full_key,
-            estimator_label= f"{estimator} K={K_REF}",
+            estimator_label= f"{estimator} K={K_REF} ({target_type})",
             output         = out_path,
         )
         print(f"  → {out_path.name}")
